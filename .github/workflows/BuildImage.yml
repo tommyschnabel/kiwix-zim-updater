@@ -16,22 +16,21 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
+      - name: Show Context
+        run: |
+            echo "github.event_name:       ${{github.event_name}}"
+            echo "github.sha:              ${{github.sha}}"
+            echo "github.repository:       ${{github.repository}}"
+            echo "github.repository_owner: ${{github.repository_owner}}"
+            echo "github.actor:            ${{github.actor}}"
+            echo "env.MAIN_BRANCH:         ${{env.MAIN_BRANCH}}"
+
       - name: Check Out Repo (Commit)
         uses: actions/checkout@v4
-        if: ${{ github.event_name != 'pull_request_target' }}
-
-      - name: Check Out Repo (PR)
-        uses: actions/checkout@v4
-        if: ${{ github.event_name == 'pull_request_target' }}
-        with:
-            ref: ${{ github.event.pull_request.head.sha }}
 
       - name: Build image
         run: |
-            docker buildx build --no-cache --build-arg MOD_VERSION=${MOD_VERSION} -t ${{ github.sha }} --platform linux/amd64 .
-            if [[ "${MULTI_ARCH,,}" == "true" ]]; then
-                docker buildx build --no-cache --build-arg MOD_VERSION=${MOD_VERSION} -t arm64v8-${{ github.sha }} --platform linux/arm64/v8 .
-            fi
+            docker buildx build --no-cache -t ${{ github.sha }} --platform linux/amd64 .
 
       - name: Tag image
         run: |
@@ -41,12 +40,12 @@ jobs:
             fi
 
       - name: Login to GitHub Container Registry
-        if: ${{ github.actor == github.event.pull_request.base.repo.owner.login}}
+        if: ${{ github.actor == github.repository_owner}}
         run: |
             echo "${{ secrets.CR_PAT }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
 
       - name: Push tags to GitHub Container Registry
-        if: ${{ github.actor == github.event.pull_request.base.repo.owner.login}}
+        if: ${{ github.actor == github.repository_owner}}
         run: |
             printf "\n## Pushed the following images/tags to GHCR:\n\n" >> $GITHUB_STEP_SUMMARY
             for i in ${DOCKERHUB_TAGS}; do
