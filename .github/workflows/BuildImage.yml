@@ -4,10 +4,6 @@ on:
     pull_request_target:
     push:
     workflow_dispatch:
-        inputs:
-            mod_version:
-                type: string
-                required: false
 
 env:
     MAIN_BRANCH: "main"
