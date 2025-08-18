@@ -57,4 +57,4 @@ jobs:
         with:
           context: .
           push: true
-          tags: ${DOCKERHUB_TAGS}
+          tags: ${{ env.DOCKERHUB_TAGS }}
