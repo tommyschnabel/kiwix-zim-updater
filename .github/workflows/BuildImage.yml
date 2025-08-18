@@ -36,7 +36,7 @@ jobs:
       - name: Tag image
         run: |
           DOCKERHUB_TAGS="${{github.repository}}:${{ github.sha }}"
-          if [[ "${github.base_ref != env.MAIN_BRANCH}" == "true" ]]; then
+          if [[ "${{github.base_ref != env.MAIN_BRANCH}}" == "true" ]]; then
             DOCKERHUB_TAGS="$DOCKERHUB_TAGS ${{github.repository}}:latest"
           fi
 
