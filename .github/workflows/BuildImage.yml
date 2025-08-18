@@ -38,6 +38,7 @@ jobs:
             if [[ "${{github.base_ref != env.MAIN_BRANCH}}" == "true" ]]; then
                 DOCKERHUB_TAGS="$DOCKERHUB_TAGS ${{github.repository}}:latest"
             fi
+            echo "DOCKERHUB_TAGS: ${DOCKERHUB_TAGS}"
 
       - name: Login to GitHub Container Registry
         if: ${{ github.actor == github.repository_owner}}
@@ -50,6 +51,6 @@ jobs:
             printf "\n## Pushed the following images/tags to GHCR:\n\n" >> $GITHUB_STEP_SUMMARY
             for i in ${DOCKERHUB_TAGS}; do
                 ighcr="${i/#/ghcr.io\/}"
-                docker push ${ighcr}
+                # docker push ${ighcr}
                 echo "\`${ighcr}\`" >> $GITHUB_STEP_SUMMARY
             done
