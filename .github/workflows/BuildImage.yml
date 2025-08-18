@@ -1,0 +1,73 @@
+name: Build Image
+
+on:
+    pull_request_target:
+    push:
+    workflow_dispatch:
+        inputs:
+            mod_version:
+                type: string
+                required: false
+
+env:
+    MAIN_BRANCH: "main"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check Out Repo (Commit)
+        uses: actions/checkout@v4
+        if: ${{ github.event_name != 'pull_request_target' }}
+
+      - name: Check Out Repo (PR)
+        uses: actions/checkout@v4
+        if: ${{ github.event_name == 'pull_request_target' }}
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Build image
+        run: |
+          docker buildx build --no-cache --build-arg MOD_VERSION=${MOD_VERSION} -t ${{ github.sha }} --platform linux/amd64 .
+          if [[ "${MULTI_ARCH,,}" == "true" ]]; then
+            docker buildx build --no-cache --build-arg MOD_VERSION=${MOD_VERSION} -t arm64v8-${{ github.sha }} --platform linux/arm64/v8 .
+          fi
+
+      - name: Tag image
+        run: |
+          DOCKERHUB_TAGS="${{github.repository}}:${{ github.sha }}"
+          if [[ "${github.base_ref != env.MAIN_BRANCH}" == "true" ]]; then
+            DOCKERHUB_TAGS="$DOCKERHUB_TAGS ${{github.repository}}:latest"
+          fi
+
+      - name: Login to GitHub Container Registry
+        if: ${{ github.triggering_actor	== github.event.pull_request.base.repo.owner.login}}
+        run: |
+          echo "${{ secrets.CR_PAT }}" | docker login ghcr.io -u ${{ secrets.CR_USER }} --password-stdin
+
+      - name: Push tags to GitHub Container Registry
+        if: ${{ github.triggering_actor	== github.event.pull_request.base.repo.owner.login}}
+        run: |
+          if [[ "${MULTI_ARCH,,}" == "true" ]]; then
+            printf "\n## Pushed the following images/tags to GHCR:\n\n" >> $GITHUB_STEP_SUMMARY
+            for i in ${DOCKERHUB_TAGS}; do
+              ighcr="${i/#/ghcr.io\/}"
+              docker push ${ighcr/:/:amd64-}
+              echo "\`${ighcr/:/:amd64-}\`" >> $GITHUB_STEP_SUMMARY
+              docker push ${ighcr/:/:arm64v8-}
+              echo "\`${ighcr/:/:arm64v8-}\`" >> $GITHUB_STEP_SUMMARY
+            done
+            printf "\n## Pushed the following manifests to GHCR:\n\n" >> $GITHUB_STEP_SUMMARY
+            for i in ${DOCKERHUB_TAGS}; do
+              ighcr="${i/#/ghcr.io\/}"
+              docker buildx imagetools create -t ${ighcr} ${ighcr/:/:amd64-} ${ighcr/:/:arm64v8-}
+              echo "\`${ighcr}\`" >> $GITHUB_STEP_SUMMARY
+            done
+          else
+            printf "\n## Pushed the following images/tags to GHCR:\n\n" >> $GITHUB_STEP_SUMMARY
+            for i in ${DOCKERHUB_TAGS}; do
+              ighcr="${i/#/ghcr.io\/}"
+              docker push ${ighcr}
+              echo "\`${ighcr}\`" >> $GITHUB_STEP_SUMMARY
+            done
+          fi
