@@ -23,7 +23,6 @@ jobs:
             echo "github.repository:       ${{github.repository}}"
             echo "github.repository_owner: ${{github.repository_owner}}"
             echo "github.actor:            ${{github.actor}}"
-            echo "env.MAIN_BRANCH:         ${{env.MAIN_BRANCH}}"
 
       - name: Check Out Repo (Commit)
         uses: actions/checkout@v4
@@ -38,7 +37,9 @@ jobs:
             if [[ "${{github.base_ref != env.MAIN_BRANCH}}" == "true" ]]; then
                 DOCKERHUB_TAGS="$DOCKERHUB_TAGS ${{github.repository}}:latest"
             fi
-            echo "DOCKERHUB_TAGS: ${DOCKERHUB_TAGS}"
+            echo "DOCKERHUB_TAGS=${DOCKERHUB_TAGS}"
+            echo "DOCKERHUB_TAGS=${DOCKERHUB_TAGS}" >> $GITHUB_ENV
+
 
       - name: Login to GitHub Container Registry
         if: ${{ github.actor == github.repository_owner}}
