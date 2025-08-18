@@ -48,7 +48,7 @@ jobs:
         env:
             GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-            docker login ghcr.io -u ${{ github.actor }} --password-stdin
+            docker login ghcr.io -u ${{ github.actor }}
 
       - name: Push tags to GitHub Container Registry
         if: ${{ github.actor == github.repository_owner}}
