@@ -36,7 +36,7 @@ jobs:
 
       - name: Generate Tags
         run: |
-            DOCKERHUB_TAGS="{{ github.sha }}"
+            DOCKERHUB_TAGS="${{ github.sha }}"
             if [[ "${{github.base_ref != env.MAIN_BRANCH}}" == "true" ]]; then
                 DOCKERHUB_TAGS="$DOCKERHUB_TAGS latest"
             fi
