@@ -36,9 +36,9 @@ jobs:
 
       - name: Generate Tags
         run: |
-            DOCKERHUB_TAGS="${{github.repository}}:${{ github.sha }}"
+            DOCKERHUB_TAGS="ghcr.io/${{github.repository}}:${{ github.sha }}"
             if [[ "${{github.base_ref != env.MAIN_BRANCH}}" == "true" ]]; then
-                DOCKERHUB_TAGS="$DOCKERHUB_TAGS,${{github.repository}}:latest"
+                DOCKERHUB_TAGS="$DOCKERHUB_TAGS,ghcr.io/${{github.repository}}:latest"
             fi
             echo "DOCKERHUB_TAGS=${DOCKERHUB_TAGS}"
             echo "DOCKERHUB_TAGS=${DOCKERHUB_TAGS}" >> $GITHUB_ENV
@@ -55,7 +55,6 @@ jobs:
         if: ${{ github.actor == github.repository_owner}}
         uses: docker/build-push-action@v5
         with:
-          registry: ghcr.io
           context: .
           push: true
           tags: ${{ env.DOCKERHUB_TAGS }}
