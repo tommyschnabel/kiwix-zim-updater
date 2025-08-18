@@ -55,6 +55,7 @@ jobs:
         if: ${{ github.actor == github.repository_owner}}
         uses: docker/build-push-action@v5
         with:
+          registry: ghcr.io
           context: .
           push: true
           tags: ${{ env.DOCKERHUB_TAGS }}
