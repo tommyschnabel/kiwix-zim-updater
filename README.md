@@ -6,11 +6,6 @@ Just pass this script your ZIM directory and away it goes. *(see Usage below)*
 
 Tested on PopOS! 22.04, and should work out of the box on most debian systems, but I have not tested that.
 
-# DEPRECATION WARNING
-`kiwix-zim.sh` has been deprecated in favor of the more descriptive `kiwix-zim-updater.sh`. A hard link from `kiwix-zim.sh` to `kiwix-zim-updater.sh` will be maintained on this repo until at least `2025-01-01T00:00:00Z` for compatability with CRON users.
-
-***CALLING `kiwix-zim.sh` WILL RESULT IN AN EXIT CODE OF 2 ON SUCCESSFUL EXECUTION. THIS BEHAVIOR IS EXPECTED. CALL `kiwix-zim-updater.sh` INSTEAD TO GET A 0 EXIT CODE***
-
 ## What It Does
 
 I wanted an easy way to ensure my ZIM library was kept updated without actually needing to check every ZIM individually. I looked for a tool to do this, but didn't find anything... so I put on my amateur BASH hat and made one.
