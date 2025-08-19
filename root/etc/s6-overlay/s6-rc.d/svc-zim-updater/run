@@ -1,33 +1,8 @@
 #!/usr/bin/with-contenv sh
 
-cd /zims
-rm *.torrent
-
-/kiwix-zim-updater.sh -t -d .
-
-# Move any new torrents to /watch
-if [[ "$(ls | grep '.torrent')" != "" ]]; then
-    echo "Found $(ls -l | grep '.torrent' | wc -l) torrent files"
-    mv *.torrent /watch
-
-    # Wait for transmission to pick up the new torrents
-    while [[ "$(ls /watch | grep '.torrent.added')" == "" ]]; do
-        echo "Waiting on torrents to be picked up by transmission..."
-        sleep 20
-    done
-
-    # Wait for downloads to finish
-    while [[ "$(ls /downloads/incomplete)" != "" ]]; do
-        echo "Waiting on torrents to be downloaded by transmission..."
-        sleep 60
-    done
-
-    # Move downloaded zim files to /zims
-    mv /downloads/complete/*.zim .
-else
-    echo "Found no new torrents"
-    ls -lh
-fi
+exec s6-setuidgid abc /update.sh &
+wait
 
 # Shut the pod down, we're done
-# poweroff
+echo "We're done here. Shutting down..."
+poweroff

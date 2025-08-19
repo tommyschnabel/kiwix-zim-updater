@@ -70,6 +70,41 @@ Not checked or installed via script:
 
 - Git *(only needed for the self-update process to work.)*
 
+## Running with Docker or Docker Compose
+If you want an all-in-one updater and downloader, you can run the script in a container with Transmission (since some larger downloads are unreliable without using torrents).
+
+These containers are meant to be short-lived, and exit after checking for updates. If the container is alive and healthy, it will serve up a Transmission UI at port 9091 (by default) that you can monitor.
+
+Make sure to mount the directory with your zim files to /zims; the rest is setup automatically.
+
+### Docker
+```shell
+docker run -it --rm \
+    -p 9091:9091 \
+    -e PUID=1000 \
+    -e PGID=1000 \
+    -v /path/to your/zims/dir:/zims \
+    ghcr.io/tommyschnabel/kiwix-zim-updater:latest
+```
+
+### Docker Compose
+Addmittedly, this is a little wonky since each time you run `docker compose up` or `docker compose create; docker compose start` this container will also run. For me, this is preferable to constantly looking for updates.
+
+```yaml
+---
+services:
+    updater:
+        image: ghcr.io/tommyschnabel/kiwix-zim-updater:latest
+        container_name: updater
+        restart: no
+        environment:
+            - PUID=1000
+            - PGID=1000
+            - TZ=Etc/UTC
+        volumes:
+        - /path/to/your/zims/dir:/zims
+```
+
 ## Install
 
 This script is self-updating. The self-update routine uses git commands to make the update so this script should be "installed" with the below command.
