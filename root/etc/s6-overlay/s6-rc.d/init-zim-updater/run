@@ -1,0 +1,12 @@
+#!/usr/bin/with-contenv sh
+
+# Setup transmission directories in already-mounted /zims dir
+# This simplifies configuration
+mkdir -p /config
+mkdir -p /downloads/complete
+mkdir -p /downloads/incomplete
+mkdir -p /watch
+
+chown -R abc /config
+chown -R abc /downloads
+chown -R abc /watch

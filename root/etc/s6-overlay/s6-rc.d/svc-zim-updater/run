@@ -26,10 +26,8 @@ if [[ "$(ls | grep '.torrent')" != "" ]]; then
     mv /downloads/complete/*.zim .
 else
     echo "Found no new torrents"
+    ls -lh
 fi
 
-# Cleanup
-rm /watch/*
-
 # Shut the pod down, we're done
-poweroff
+# poweroff
