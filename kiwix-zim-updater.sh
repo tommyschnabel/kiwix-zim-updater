@@ -30,18 +30,20 @@ CALLEDSCRIPTNAME="$0"
 CALLEDSCRIPTFILE="$(basename "$CALLEDSCRIPTNAME")"
 CALLEDSCRIPTPATH="$(dirname "$CALLEDSCRIPTNAME")"
 ARGS=("$@")
-BRANCH="main"
-SKIP_UPDATE=0
-DEBUG=1 # This forces the script to default to "dry-run/simulation mode"
-MIN_SIZE=0
-MAX_SIZE=0
-CALCULATE_CHECKSUM=0
-CHECKSUM_FILES=1
-VERIFY_LIBRARY=0
-FORCE_FETCH_INDEX=0
-DOWNLOAD_METHOD=1 # 1: web 2: torrent
-BaseURL="https://download.kiwix.org/zim/"
-ZIMPath=""
+BRANCH="${BRANCH:-main}"
+SKIP_UPDATE="${SKIP_UPDATE:-0}"
+DEBUG="${DEBUG:-1}"
+MIN_SIZE="${MIN_SIZE:-0}"
+MAX_SIZE="${MAX_SIZE:-0}"
+CALCULATE_CHECKSUM="${CALCULATE_CHECKSUM:-0}"
+CHECKSUM_FILES="${CHECKSUM_FILES:-1}"
+VERIFY_LIBRARY="${VERIFY_LIBRARY:-0}"
+FORCE_FETCH_INDEX="${FORCE_FETCH_INDEX:-0}"
+DOWNLOAD_METHOD="${DOWNLOAD_METHOD:-1}"
+ARCHIVE_OLD="${ARCHIVE_OLD:-0}"
+BaseURL="${BaseURL:-https://download.kiwix.org/zim/}"
+ZIMPath="${ZIMPath:-}"
+COUNTRY_CODE="${COUNTRY_CODE:-}"
 
 RED_REGULAR="\033[0;31m"
 RED_BOLD="\033[1;31m"
@@ -183,6 +185,8 @@ usage_example() {
   echo 'Web Download Options:'
   echo '    -c, --calculate-checksum   Verifies that the downloaded files were not corrupted, but can take a while for large downloads.'
   echo '    -p, --skip-purge           Skips purging any replaced ZIMs.'
+  echo '    -a, --archive              Moves replaced ZIMs to old_zims/ subdirectory'
+  echo '                               instead of deleting them.'
   echo '    -l <location>, --location  Country Code to prefer mirrors from'
   echo '    -d, --disable-dry-run      Dry-Run Override.'
   echo '                               *** Caution ***'
@@ -353,6 +357,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     -p | --skip-purge)
       SKIP_PURGE=1
+      shift # discard argument
+      ;;
+    -a | --archive)
+      ARCHIVE_OLD=1
       shift # discard argument
       ;;
     -n | --min-size)
@@ -710,13 +718,45 @@ if [ $AnyDownloads -eq 1 ]; then
       if [[ $DOWNLOAD_METHOD -eq 2 ]]; then
         FilePath="$FilePath.torrent"
         if [[ -f "$LockFilePath" ]]; then
-          [[ $DEBUG -eq 0 ]] && wget -q --show-progress --progress=bar:force -c -O "$FilePath" "$DownloadURL" 2>&1 |& tee -a download.log # Download new ZIM
+          [[ $DEBUG -eq 0 ]] && wget -q --show-progress --progress=bar:force -c -O "$FilePath" "$DownloadURL" 2>&1 |& tee -a download.log
           [[ $DEBUG -eq 1 ]] && echo "Continue Download : $FilePath" >>download.log
         elif [[ -f $FilePath ]]; then # New ZIM already found, we don't need to download it.
           [[ $DEBUG -eq 1 ]] && echo "Download : New Torrent already exists on disk. Skipping download." >>download.log
-        else # New ZIM not found, so we'll go ahead and download it.
-          [[ $DEBUG -eq 0 ]] && wget -q --show-progress --progress=bar:force -c -O "$FilePath" "$DownloadURL" 2>&1 |& tee -a download.log # Download new ZIM
+        else
+          [[ $DEBUG -eq 0 ]] && wget -q --show-progress --progress=bar:force -c -O "$FilePath" "$DownloadURL" 2>&1 |& tee -a download.log
           [[ $DEBUG -eq 1 ]] && echo "Download : $FilePath" >>download.log
+        fi
+
+        if [[ -f "$NewZIMPath" ]] && [[ "$OldZIMPath" != "$NewZIMPath" ]]; then
+          echo -e "${BLUE_REGULAR}    Old : $OldZIM${CLEAR}"
+          echo "Old : $OldZIM" >>download.log
+          echo -e "${BLUE_BOLD}    New : $NewZIM${CLEAR}"
+          echo "New : $NewZIM" >>download.log
+          if [[ -f "$OldZIMPath" ]]; then
+            if [[ $ARCHIVE_OLD -eq 1 ]]; then
+              if [[ $DEBUG -eq 0 ]]; then
+                [[ ! -d "${ZIMPath}old_zims" ]] && mkdir -p "${ZIMPath}old_zims"
+                [[ -f "${ZIMPath}old_zims/$OldZIM" ]] && rm "${ZIMPath}old_zims/$OldZIM"
+                [[ -f "${ZIMPath}old_zims/$OldZIM.sha256" ]] && rm "${ZIMPath}old_zims/$OldZIM.sha256"
+                mv "$OldZIMPath" "${ZIMPath}old_zims/"
+                [[ -f "$OldZIMPath.sha256" ]] && mv "$OldZIMPath.sha256" "${ZIMPath}old_zims/"
+                echo -e "${GREEN_BOLD}    ✓ Status : Torrent download complete. Old ZIM moved to old_zims/.${CLEAR}"
+                echo "✓ Status : Torrent download complete. Old ZIM moved to old_zims/." >>download.log
+              else
+                echo -e "${GREEN_BOLD}    ✓ Status : *** Simulated *** Old ZIM would be moved to old_zims/${CLEAR}"
+                echo "✓ Status : *** Simulated *** Old ZIM would be moved to old_zims/" >>download.log
+              fi
+            else
+              if [[ $DEBUG -eq 0 ]]; then
+                rm "$OldZIMPath" && rm "$OldZIMPath.sha256" 2>/dev/null
+                echo -e "${GREEN_BOLD}    ✓ Status : Torrent download complete. Old ZIM purged.${CLEAR}"
+                echo "✓ Status : Torrent download complete. Old ZIM purged." >>download.log
+              else
+                echo -e "${GREEN_BOLD}    ✓ Status : *** Simulated *** Old ZIM would be purged${CLEAR}"
+                echo "✓ Status : *** Simulated *** Old ZIM would be purged" >>download.log
+              fi
+            fi
+          fi
         fi
 
         continue
@@ -801,15 +841,36 @@ if [ $AnyDownloads -eq 1 ]; then
         if [[ "$OldZIMPath" == "$NewZIMPath" ]]; then
           echo -e "${GREEN_BOLD}    ✓ Status : New ZIM downloaded succesfully.${CLEAR}"
           echo "✓ Status : New ZIM downloaded succesfully." >>download.log
-          #                    rm "$OldZIMPath.sha256" 2>/dev/null # Purge old ZIM
         else
-          echo -e "${GREEN_BOLD}    ✓ Status : New ZIM downloaded succesfully. Old ZIM purged.${CLEAR}"
-          echo "✓ Status : New ZIM downloaded succesfully. Old ZIM purged." >>download.log
-          [[ -f "$OldZIMPath" ]] && rm "$OldZIMPath" && rm "$OldZIMPath.sha256" 2>/dev/null # Purge old ZIM
+          if [[ -f "$OldZIMPath" ]]; then
+            if [[ $ARCHIVE_OLD -eq 1 ]]; then
+              [[ ! -d "${ZIMPath}old_zims" ]] && mkdir -p "${ZIMPath}old_zims"
+              [[ -f "${ZIMPath}old_zims/$OldZIM" ]] && rm "${ZIMPath}old_zims/$OldZIM"
+              [[ -f "${ZIMPath}old_zims/$OldZIM.sha256" ]] && rm "${ZIMPath}old_zims/$OldZIM.sha256"
+              mv "$OldZIMPath" "${ZIMPath}old_zims/"
+              [[ -f "$OldZIMPath.sha256" ]] && mv "$OldZIMPath.sha256" "${ZIMPath}old_zims/"
+              echo -e "${GREEN_BOLD}    ✓ Status : New ZIM downloaded successfully. Old ZIM moved to old_zims/.${CLEAR}"
+              echo "✓ Status : New ZIM downloaded successfully. Old ZIM moved to old_zims/." >>download.log
+            else
+              rm "$OldZIMPath" && rm "$OldZIMPath.sha256" 2>/dev/null
+              echo -e "${GREEN_BOLD}    ✓ Status : New ZIM downloaded successfully. Old ZIM purged.${CLEAR}"
+              echo "✓ Status : New ZIM downloaded successfully. Old ZIM purged." >>download.log
+            fi
+          fi
         fi
       else
-        echo -e "${GREEN_BOLD}    ✓ Status : *** Simulated ***${CLEAR}"
-        echo "✓ Status : *** Simulated ***" >>download.log
+        if [[ "$OldZIMPath" == "$NewZIMPath" ]]; then
+          echo -e "${GREEN_BOLD}    ✓ Status : *** Simulated ***${CLEAR}"
+          echo "✓ Status : *** Simulated ***" >>download.log
+        else
+          if [[ $ARCHIVE_OLD -eq 1 ]]; then
+            echo -e "${GREEN_BOLD}    ✓ Status : *** Simulated *** New ZIM exists, old ZIM would be moved to old_zims/${CLEAR}"
+            echo "✓ Status : *** Simulated *** New ZIM exists, old ZIM would be moved to old_zims/" >>download.log
+          else
+            echo -e "${GREEN_BOLD}    ✓ Status : *** Simulated *** New zim exists, old zim purged${CLEAR}"
+            echo "✓ Status : *** Simulated *** New zim exists, old zim purged" >>download.log
+          fi
+        fi
       fi
     else # New ZIM not found. Something went wrong, so we will skip this purge.
       if [[ $DEBUG -eq 0 ]]; then
