@@ -1,0 +1,26 @@
+name: Tests
+
+# bats tests for the catalog scrape and mirror selection, plus a shell syntax
+# check on both scripts.
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  bats:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install bats
+        run: sudo apt-get update && sudo apt-get install -y bats
+
+      - name: Syntax check
+        run: |
+          bash -n kiwix-zim-updater.sh
+          bash -n update.sh
+
+      - name: bats
+        run: bats tests
