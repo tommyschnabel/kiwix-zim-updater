@@ -1,6 +1,11 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
-VER="3.3"
+# Kiwix-Zim-Updater. A script to update your kiwix library
+# Copyright (C) 2022      DocDrydenn
+# Copyright (C) 2023-2026 jojo2357
+# SPDX-License-Identifier: GPL-2.0-only
+
+VER="3.5"
 
 # This array will contain all of the local zims, with the file extension
 LocalZIMArray=()
@@ -8,7 +13,7 @@ LocalZIMArray=()
 LocalZIMNameArray=()
 # This array will map the local zim to the index in the remote arrays that contains the same base file name
 LocalZIMRemoteIndexArray=()
-# This array is a boolean array which remembers if a given local zim shoud be processed in the download loop
+# This array is a boolean array which remembers if a given local zim should be processed in the download loop
 LocalRequiresDownloadArray=()
 # After updating, this array will be used to store hanging locks and to deal with them
 HangingFileLocks=();
@@ -41,7 +46,9 @@ VERIFY_LIBRARY="${VERIFY_LIBRARY:-0}"
 FORCE_FETCH_INDEX="${FORCE_FETCH_INDEX:-0}"
 DOWNLOAD_METHOD="${DOWNLOAD_METHOD:-1}"
 ARCHIVE_OLD="${ARCHIVE_OLD:-0}"
-BaseURL="${BaseURL:-https://download.kiwix.org/zim/}"
+# sort of a default, will be overwritten when the library is parsed. Set here to what it probably will be
+BaseURL="${BaseURL:-https://lb.download.kiwix.org/zim/}"
+CatalogURL="${CatalogURL:-https://opds.library.kiwix.org/catalog/v2/entries?count=-1}"
 ZIMPath="${ZIMPath:-}"
 COUNTRY_CODE="${COUNTRY_CODE:-}"
 
@@ -54,6 +61,12 @@ GREEN_BOLD="\033[1;32m"
 BLUE_REGULAR="\033[0;34m"
 BLUE_BOLD="\033[1;34m"
 CLEAR="\033[0m"
+
+MONTH_REGEX="\d{2}[a-z]?"
+YEAR_REGEX="\d{4}"
+END_ANCHOR_REGEX="\.zim"
+
+COMPLETE_ENDING_REGEX="$YEAR_REGEX-$MONTH_REGEX$END_ANCHOR_REGEX"
 
 # This will ask the api what files it has to offer and store them in arrays
 master_scrape() {
@@ -74,26 +87,60 @@ master_scrape() {
   fi
 
   if [[ FORCE_FETCH_INDEX -eq 1 ]] || [[ $indexIsValid -eq 0 ]]; then
-    # both write the file timestamp to the index file and save all of the links to RawLibrary
-    RawLibrary="$(wget --show-progress -q -O - "https://library.kiwix.org/catalog/v2/entries?count=-1" | tee --output-error=warn-nopipe >(grep -ioP "(?<=<updated>)\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?=Z</updated>)" | head -1 > kiwix-index) | grep -i 'application/x-zim' | grep -ioP "^\s+\K.*$")"
-
+    # both write the file timestamp to the index file and save all of the links to RawLibrary.
+    # Lets defer touching the index until we have actually fetched it
+    RawLibrary="$(wget --show-progress -q -O - "$CatalogURL")"
+    RawLibrary="$(echo "$RawLibrary" | tee --output-error=warn-nopipe >(grep -ioP "(?<=<updated>)\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?=Z</updated>)" | head -1 > kiwix-index) | grep -i 'application/x-zim' | grep -ioP "^\s+\K.*$")"
     echo "$RawLibrary" >> kiwix-index
   else
     RawLibrary=$(grep -i '<link rel' < kiwix-index)
   fi
 
-  IFS=$'\n' read -r -d '' -a FileSizes < <(echo "$RawLibrary" | grep -ioP '(?<=length=")\d+(?=")')
+  REMOTE_FILE_REGEX="[^/]/\K[\w:\/\-.]+"
+  BASE_REGEX="[^/]/\K[\w:\/\-.]+(?=$COMPLETE_ENDING_REGEX)"
+  REMOTE_PATH_REGEX="^[\w:\/\-.]+"
+  REMOTE_CATEGORY_REGEX="^[^/]+"
+
+  ValidLibrary="$RawLibrary"
+  # ensure that every line matches every regex
+  ValidLibrary="$(echo "$ValidLibrary" | grep -iP '(?<=length=")\d+(?=")')"
+  ValidLibrary="$(echo "$ValidLibrary" | grep -iP "(?<=href=\")[\w:\/\-.]+(?=\.meta4\")")"
+  # we have to add extra here so that we dont have to change the regexes
+  ValidLibrary="$(echo "$ValidLibrary" | grep -iP "href=\"https?://[^/]+$REMOTE_FILE_REGEX")"
+  ValidLibrary="$(echo "$ValidLibrary" | grep -iP "href=\"https?://[^/]+$BASE_REGEX")"
+  # these probably arent gonna be a problem so we will ignore them
+#  ValidLibrary="$(echo "$ValidLibrary" | grep -iP "$REMOTE_PATH_REGEX")"
+#  ValidLibrary="$(echo "$ValidLibrary" | grep -iP "$REMOTE_CATEGORY_REGEX")"
+
+  IFS=$'\n' read -r -d '' -a FileSizes < <(echo "$ValidLibrary" | grep -ioP '(?<=length=")\d+(?=")')
   unset IFS
 
-  hrefs=$(echo "$RawLibrary" | grep -ioP "(?<=href=\")[\w:\/\-.]+(?=\.meta4\")" | grep -ioP "$BaseURL\K.*")
+  RawLinks=$(echo "$ValidLibrary" | grep -ioP "(?<=href=\")[\w:\/\-.]+(?=\.meta4\")")
 
-  IFS=$'\n' read -r -d '' -a RemoteFiles < <(echo "$hrefs" | grep -ioP "[^/]/\K[\w:\/\-.]+")
+  BaseURL=$(echo "$RawLinks" | grep -ioP 'https?://[^/]+' | uniq)
+
+  FoundURLs=$(echo "$BaseURL" | wc -l)
+
+  if [[ -z "$BaseURL" ]]; then
+    echo -e "${RED_REGULAR}  ✗ No ZIM URLs found. Exiting...${CLEAR}"
+    exit 0
+  elif [[ $FoundURLs -ne 1 ]]; then
+    echo -e "${RED_REGULAR}  ✗ Too many zim base urls found. Please open an issue on github. Exiting...${CLEAR}"
+    exit 0
+  else
+    BaseURL="$BaseURL/zim/"
+    echo -e "${GREEN_REGULAR}    ✓ Using $BaseURL as base download directory for metadata"
+  fi
+
+  hrefs=$(echo "$ValidLibrary" | grep -ioP "(?<=href=\")[\w:\/\-.]+(?=\.meta4\")" | grep -ioP "$BaseURL\K.*")
+
+  IFS=$'\n' read -r -d '' -a RemoteFiles < <(echo "$hrefs" | grep -ioP "$REMOTE_FILE_REGEX")
   unset IFS
-  IFS=$'\n' read -r -d '' -a Basenames < <(echo "$hrefs" | grep -ioP "[^/]/\K[\w:\/\-.]+(?=\d{4}-\d{2}\.zim)")
+  IFS=$'\n' read -r -d '' -a Basenames < <(echo "$hrefs" | grep -ioP "$BASE_REGEX")
   unset IFS
-  IFS=$'\n' read -r -d '' -a RemotePaths < <(echo "$hrefs" | grep -ioP "^[\w:\/\-.]+")
+  IFS=$'\n' read -r -d '' -a RemotePaths < <(echo "$hrefs" | grep -ioP "$REMOTE_PATH_REGEX")
   unset IFS # distinct from above for processing speed reasons
-  IFS=$'\n' read -r -d '' -a RemoteCategory < <(echo "$hrefs" | grep -ioP "^[^/]+")
+  IFS=$'\n' read -r -d '' -a RemoteCategory < <(echo "$hrefs" | grep -ioP "$REMOTE_CATEGORY_REGEX")
   unset IFS
 
   if [[ ${#RemoteFiles[@]} -eq 0 ]]; then
@@ -105,7 +152,18 @@ master_scrape() {
     echo "✓ Found ${#RemoteFiles[@]} files online" >> download.log
   fi
 
+  if [[ ${#RemoteFiles[@]} -ne ${#RemoteFiles[@]} ]] || \
+    [[ ${#RemoteFiles[@]} -ne ${#Basenames[@]} ]] || \
+    [[ ${#RemoteFiles[@]} -ne ${#RemotePaths[@]} ]] || \
+    [[ ${#RemoteFiles[@]} -ne ${#RemoteCategory[@]} ]] || \
+    [[ ${#RemoteFiles[@]} -ne ${#FileSizes[@]} ]] ; then
+    echo -e "${RED_BOLD}CRITICAL ERROR!${CLEAR}"
+    echo -e "${RED}Parsed array lengths did not match. Aborting to prevent data loss${CLEAR}"
+    exit 99
+  fi
+
   # Housekeeping...
+  unset ValidLibrary
   unset RawLibrary
   unset hrefs
 }
@@ -117,7 +175,7 @@ self_update() {
   echo
   # Check if script path is a git clone.
   #   If true, then check for update.
-  #   If false, skip self-update check/funciton.
+  #   If false, skip self-update check/function.
   if [ $SKIP_UPDATE -eq 1 ]; then
     echo -e "${YELLOW_REGULAR}   Check Skipped${CLEAR}"
     echo "Check Skipped" >> download.log
@@ -238,14 +296,20 @@ flags() {
 
   for index in "${!LocalZIMArray[@]}" ; do
     duplicated=0
-    myBasename=$(echo "${LocalZIMArray[$index]}" | grep -ioP "^.*(?=_\d{4}-\d{2}\.zim$)")
+    myBasename=$(echo "${LocalZIMArray[$index]}" | grep -ioP "^.*(?=_$COMPLETE_ENDING_REGEX$)")
+
+    # Sorting cannot reliably sort the month string so we need to check it to be sure
+    MyDate="$(echo "${LocalZIMArray[$index]}" | grep -oP "$YEAR_REGEX-$MONTH_REGEX(?=$END_ANCHOR_REGEX$)")"
+    MyYear="$(echo "$MyDate" | grep -oP "$YEAR_REGEX(?=-$MONTH_REGEX)")"
+    MyMonth="$(echo "$MyDate" | grep -oP "(?<=$YEAR_REGEX-)$MONTH_REGEX")"
+
     for scanIndex in "${!LocalZIMArray[@]}"; do
       if [[ -f "${ZIMPath}.~lock.${LocalZIMArray[$index]}" ]]; then
         if [[ $index -le $scanIndex ]] || [[ -f "${ZIMPath}.~lock.${LocalZIMArray[$scanIndex]}" ]]; then continue; fi
       else
         if [[ $index -ge $scanIndex ]] || [[ -f "${ZIMPath}.~lock.${LocalZIMArray[$scanIndex]}" ]]; then continue; fi
       fi
-      scanBasename=$(echo "${LocalZIMArray[$scanIndex]}" | grep -ioP "^.*(?=_\d{4}-\d{2}\.zim$)")
+      scanBasename=$(echo "${LocalZIMArray[$scanIndex]}" | grep -ioP "^.*(?=_$COMPLETE_ENDING_REGEX$)")
 
       if [[ "$myBasename" == "$scanBasename" ]]; then
         if [[ -f "${ZIMPath}.~lock.${LocalZIMArray[$index]}" ]]; then
@@ -253,6 +317,22 @@ flags() {
         elif [[ -f "${ZIMPath}${LocalZIMArray[$index]}.torrent" ]]; then
           echo "Disregarding ${LocalZIMArray[$index]} because new torrent exists ${LocalZIMArray[$scanIndex]}" >> download.log
         else
+          ScanDate="$(echo "${LocalZIMArray[$scanIndex]}" | grep -oP "$YEAR_REGEX-$MONTH_REGEX(?=$END_ANCHOR_REGEX$)")"
+          ScanYear="$(echo "$ScanDate" | grep -oP "$YEAR_REGEX(?=-$MONTH_REGEX)")"
+          ScanMonth="$(echo "$ScanDate" | grep -oP "(?<=$YEAR_REGEX-)$MONTH_REGEX")"
+
+          # this file is not shadowed if it is newer.
+          # this is caused by `ls -1` and `sort` having weird lexicons that make the prefix sort unreliable that 02a can sort between 01 and 02 instead of after 02
+          if [[ $MyYear > $ScanYear ]]; then
+            echo "Disregarding ${LocalZIMArray[$scanIndex]} because it is shadowed by ${LocalZIMArray[$index]}" >> download.log
+            duplicated=2
+            break
+          elif [[ $MyYear == $ScanYear ]] && [[ $MyMonth > $ScanMonth ]]; then
+            echo "Disregarding ${LocalZIMArray[$scanIndex]} because it is shadowed by ${LocalZIMArray[$index]}" >> download.log
+            duplicated=2
+            break
+          fi
+
           echo "Disregarding ${LocalZIMArray[$index]} because it is shadowed by ${LocalZIMArray[$scanIndex]}" >> download.log
         fi
         duplicated=1
@@ -260,6 +340,7 @@ flags() {
       fi
     done
     [[ $duplicated -eq 1 ]] && unset -v 'LocalZIMArray[$index]'
+    [[ $duplicated -eq 2 ]] && unset -v 'LocalZIMArray[$scanIndex]'
   done
   LocalZIMArray=("${LocalZIMArray[@]}")
 
@@ -284,7 +365,7 @@ flags() {
 
   for ((i = 0; i < ${#LocalZIMArray[@]}; i++)); do                                             # Loop through local ZIM(s).
     LocalZIMNameArray[$i]=$(basename "${LocalZIMArray[$i]}")                                   # Extract file name.
-    filename=$(basename "${LocalZIMArray[$i]}" | grep -ioP "[\w:\/\-.]+(?=\d{4}-\d{2}\.zim$)") # Extract file name.
+    filename=$(basename "${LocalZIMArray[$i]}" | grep -ioP "[\w:\/\-.]+(?=$COMPLETE_ENDING_REGEX$)") # Extract file name.
     #        IFS='_' read -ra fields <<< "${LocalZIMNameArray[$i]}"; unset IFS  # Break the filename into fields delimited by the underscore '_'
 
     # Search MasterZIMArray for the current local ZIM to discover the online Root (directory) for the URL
@@ -379,7 +460,7 @@ while [[ $# -gt 0 ]]; do
         COUNTRY_CODE=$1 # convert passed arg to bytes
       else
         COUNTRY_CODE=""
-        echo "Invlaid country code, falling back to default kiwix behavior" >> download.log
+        echo "Invalid country code, falling back to default kiwix behavior" >> download.log
       fi
       shift # discard value
       ;;
@@ -387,7 +468,7 @@ while [[ $# -gt 0 ]]; do
       CALCULATE_CHECKSUM=1
       shift
       ;;
-    -f | --verfiy-library)
+    -f | --verfiy-library | --verify-library)
       VERIFY_LIBRARY=1
       CALCULATE_CHECKSUM=1
       shift
@@ -492,13 +573,13 @@ for ((i = 0; i < ${#LocalZIMNameArray[@]}; i++)); do
 
   [[ -f "$ZIMPath$MatchingFileName.torrent" ]] && [[ ! -f "$ZIMPath$MatchingFileName" ]] && echo -e "${YELLOW_REGULAR}    Torrent already downloaded\n${GREEN_BOLD}    ✓ Online Version Found${CLEAR}\n" && LocalRequiresDownloadArray+=(0) && continue
 
-  MatchedDate="$(echo "$MatchingFileName" | grep -oP '\d{4}-\d{2}(?=\.zim$)')"
-  MatchedYear="$(echo "$MatchedDate" | grep -oP '\d{4}(?=-\d{2})')"
-  MatchedMonth="$(echo "$MatchedDate" | grep -oP '(?<=\d{4}-)\d{2}')"
+  MatchedDate="$(echo "$MatchingFileName" | grep -oP "$YEAR_REGEX-$MONTH_REGEX(?=$END_ANCHOR_REGEX$)")"
+  MatchedYear="$(echo "$MatchedDate" | grep -oP "$YEAR_REGEX(?=-$MONTH_REGEX)")"
+  MatchedMonth="$(echo "$MatchedDate" | grep -oP "(?<=$YEAR_REGEX-)$MONTH_REGEX")"
 
-  LocalDate="$(echo "$FileName" | grep -oP '\d{4}-\d{2}(?=\.zim$)')"
-  LocalYear="$(echo "$LocalDate" | grep -oP '\d{4}(?=-\d{2})')"
-  LocalMonth="$(echo "$LocalDate" | grep -oP '(?<=\d{4}-)\d{2}')"
+  LocalDate="$(echo "$FileName" | grep -oP "$YEAR_REGEX-$MONTH_REGEX(?=$END_ANCHOR_REGEX$)")"
+  LocalYear="$(echo "$LocalDate" | grep -oP "$YEAR_REGEX(?=-$MONTH_REGEX)")"
+  LocalMonth="$(echo "$LocalDate" | grep -oP "(?<=$YEAR_REGEX-)$MONTH_REGEX")"
 
   FileTooSmall=0
   [[ $MIN_SIZE -gt 0 ]] && [[ $MatchingSize -lt $MIN_SIZE ]] && FileTooSmall=1
@@ -546,16 +627,16 @@ for ((i = 0; i < ${#LocalZIMNameArray[@]}; i++)); do
     else
       if [ $FileTooSmall -eq 1 ]; then
         LocalRequiresDownloadArray+=(0)
-        [[ $DEBUG -eq 0 ]] && echo -e "${GREEN_REGULAR}    ✓ Update skipped (minimum: $(numfmt --to=iec-i $MIN_SIZE), download size: $(numfmt --to=iec-i "$MatchingSize")). New version: $(echo "$MatchingFileName" | grep -oP '\d{4}-\d{2}(?=\.zim$)')${CLEAR}"
-        [[ $DEBUG -eq 1 ]] && echo -e "${GREEN_REGULAR}    ✓ *** Simulated ***  Update skipped (minimum: $(numfmt --to=iec-i $MIN_SIZE), download size: $(numfmt --to=iec-i "$MatchingSize")). New version: $(echo "$MatchingFileName" | grep -oP '\d{4}-\d{2}(?=\.zim$)')${CLEAR}"
+        [[ $DEBUG -eq 0 ]] && echo -e "${GREEN_REGULAR}    ✓ Update skipped (minimum: $(numfmt --to=iec-i $MIN_SIZE), download size: $(numfmt --to=iec-i "$MatchingSize")). New version: $(echo "$MatchingFileName" | grep -oP "$YEAR_REGEX-$MONTH_REGEX(?=$END_ANCHOR_REGEX$)")${CLEAR}"
+        [[ $DEBUG -eq 1 ]] && echo -e "${GREEN_REGULAR}    ✓ *** Simulated ***  Update skipped (minimum: $(numfmt --to=iec-i $MIN_SIZE), download size: $(numfmt --to=iec-i "$MatchingSize")). New version: $(echo "$MatchingFileName" | grep -oP "$YEAR_REGEX-$MONTH_REGEX(?=$END_ANCHOR_REGEX$)")${CLEAR}"
       elif [ $FileTooLarge -eq 1 ]; then
         LocalRequiresDownloadArray+=(0)
-        [[ $DEBUG -eq 0 ]] && echo -e "${GREEN_REGULAR}    ✓ Update skipped (maximum: $(numfmt --to=iec-i $MAX_SIZE), download size: $(numfmt --to=iec-i "$MatchingSize")). New version: $(echo "$MatchingFileName" | grep -oP '\d{4}-\d{2}(?=\.zim$)')${CLEAR}"
-        [[ $DEBUG -eq 1 ]] && echo -e "${GREEN_REGULAR}    ✓ *** Simulated ***  Update skipped (maximum: $(numfmt --to=iec-i $MAX_SIZE), download size: $(numfmt --to=iec-i "$MatchingSize")). New version: $(echo "$MatchingFileName" | grep -oP '\d{4}-\d{2}(?=\.zim$)')${CLEAR}"
-      elif [ "$MatchedYear" -lt "$LocalYear" ]; then
+        [[ $DEBUG -eq 0 ]] && echo -e "${GREEN_REGULAR}    ✓ Update skipped (maximum: $(numfmt --to=iec-i $MAX_SIZE), download size: $(numfmt --to=iec-i "$MatchingSize")). New version: $(echo "$MatchingFileName" | grep -oP "$YEAR_REGEX-$MONTH_REGEX(?=$END_ANCHOR_REGEX$)")${CLEAR}"
+        [[ $DEBUG -eq 1 ]] && echo -e "${GREEN_REGULAR}    ✓ *** Simulated ***  Update skipped (maximum: $(numfmt --to=iec-i $MAX_SIZE), download size: $(numfmt --to=iec-i "$MatchingSize")). New version: $(echo "$MatchingFileName" | grep -oP "$YEAR_REGEX-$MONTH_REGEX(?=$END_ANCHOR_REGEX$)")${CLEAR}"
+      elif [[ $MatchedYear < $LocalYear ]]; then
         LocalRequiresDownloadArray+=(0)
         echo "    ✗ No new update"
-      elif [ "$MatchedYear" -eq "$LocalYear" ] && [ "$MatchedMonth" -le "$LocalMonth" ]; then
+      elif [[ "$MatchedYear" == "$LocalYear" ]] && { [[ $MatchedMonth < $LocalMonth ]] || [[ "$MatchedMonth" == "$LocalMonth" ]] ; }; then
         LocalRequiresDownloadArray+=(0)
         echo "    ✗ No new update"
       else
@@ -715,15 +796,25 @@ if [ $AnyDownloads -eq 1 ]; then
     [[ $DEBUG -eq 1 ]] && echo "Start : $(date -u) *** Simulation ***" >>download.log
     # Here is where we actually download the files and log to the download.log file.
     if [[ $RequiresDownload -eq 1 ]]; then
+      [[ $IsMirror -eq 0 ]] && echo -e "${BLUE_REGULAR}    Download (direct) : $DownloadURL${CLEAR}"
+      [[ $IsMirror -eq 1 ]] && echo -e "${BLUE_REGULAR}    Download (mirror) : $DownloadURL${CLEAR}"
+
+      echo >>download.log
+      echo "=======================================================================" >>download.log
+      echo "File : $NewZIM" >>download.log
+      [[ $IsMirror -eq 0 ]] && echo "URL (direct) : $DownloadURL" >>download.log
+      [[ $IsMirror -eq 1 ]] && echo "URL (mirror) : $DownloadURL" >>download.log
+      echo >>download.log
+
       if [[ $DOWNLOAD_METHOD -eq 2 ]]; then
         FilePath="$FilePath.torrent"
         if [[ -f "$LockFilePath" ]]; then
-          [[ $DEBUG -eq 0 ]] && wget -q --show-progress --progress=bar:force -c -O "$FilePath" "$DownloadURL" 2>&1 |& tee -a download.log
+          [[ $DEBUG -eq 0 ]] && wget -q --show-progress --progress=bar:force -c -O "$FilePath" "$DownloadURL" 2>&1 |& tee -a download.log # Download new ZIM
           [[ $DEBUG -eq 1 ]] && echo "Continue Download : $FilePath" >>download.log
         elif [[ -f $FilePath ]]; then # New ZIM already found, we don't need to download it.
           [[ $DEBUG -eq 1 ]] && echo "Download : New Torrent already exists on disk. Skipping download." >>download.log
-        else
-          [[ $DEBUG -eq 0 ]] && wget -q --show-progress --progress=bar:force -c -O "$FilePath" "$DownloadURL" 2>&1 |& tee -a download.log
+        else # New ZIM not found, so we'll go ahead and download it.
+          [[ $DEBUG -eq 0 ]] && wget -q --show-progress --progress=bar:force -c -O "$FilePath" "$DownloadURL" 2>&1 |& tee -a download.log # Download new ZIM
           [[ $DEBUG -eq 1 ]] && echo "Download : $FilePath" >>download.log
         fi
 
@@ -761,31 +852,21 @@ if [ $AnyDownloads -eq 1 ]; then
 
         continue
       else
-        [[ $IsMirror -eq 0 ]] && echo -e "${BLUE_REGULAR}    Download (direct) : $DownloadURL${CLEAR}"
-        [[ $IsMirror -eq 1 ]] && echo -e "${BLUE_REGULAR}    Download (mirror) : $DownloadURL${CLEAR}"
-        echo >>download.log
-        echo "=======================================================================" >>download.log
-        echo "File : $NewZIM" >>download.log
-        [[ $IsMirror -eq 0 ]] && echo "URL (direct) : $DownloadURL" >>download.log
-        [[ $IsMirror -eq 1 ]] && echo "URL (mirror) : $DownloadURL" >>download.log
-        echo >>download.log
-
-
         # Before we actually download, let's just check to see that it isn't already in the folder.
         if [[ -f "$LockFilePath" ]]; then
-          [[ $DEBUG -eq 0 ]] && wget -q --show-progress --progress=bar:force -c -O "$FilePath" "$DownloadURL" 2>&1 |& tee -a download.log # Download new ZIM
+          [[ $DEBUG -eq 0 ]] && wget -q --show-progress --progress=bar:force -c -O "$FilePath" "$DownloadURL" 2>&1 | tee -a download.log # Download new ZIM
           [[ $DEBUG -eq 1 ]] && echo "Continue Download : $FilePath" >>download.log
         elif [[ -f $FilePath ]]; then # New ZIM already found, we don't need to download it.
           [[ $DEBUG -eq 1 ]] && echo "Download : New ZIM already exists on disk. Skipping download." >>download.log
         else # New ZIM not found, so we'll go ahead and download it.
           [[ $DEBUG -eq 0 ]] && touch "$LockFilePath"
-          [[ $DEBUG -eq 0 ]] && wget -q --show-progress --progress=bar:force -c -O "$FilePath" "$DownloadURL" 2>&1 |& tee -a download.log # Download new ZIM
+          [[ $DEBUG -eq 0 ]] && wget -q --show-progress --progress=bar:force -c -O "$FilePath" "$DownloadURL" 2>&1 | tee -a download.log # Download new ZIM
           [[ $DEBUG -eq 1 ]] && echo "Download : $FilePath" >>download.log
         fi
       fi
     fi
 
-    echo "$ExpectedHash $NewZIM" 2>/dev/null 1>"$NewZIMPath.sha256"
+    [[ $DEBUG -eq 0 ]] && echo "$ExpectedHash $NewZIM" 2>/dev/null 1>"$NewZIMPath.sha256"
     if [[ $CALCULATE_CHECKSUM -eq 1 ]]; then
       echo -e "${BLUE_REGULAR}    Calculating checksum for : $NewZIMPath${CLEAR}"
       if [[ $(du -b "$NewZIMPath" 2>/dev/null | grep -ioP "^\d+") -ne "$ExpectedSize" ]]; then
@@ -818,12 +899,12 @@ if [ $AnyDownloads -eq 1 ]; then
     echo >> download.log
     [[ $DownloadFailed -eq 1 ]] && echo " !!! DOWNLOAD FAILED !!!" >>download.log
 
-    # in all of these cases, we will not re-pruge and will leave the lockfile so we know to resume later
+    # in all of these cases, we will not re-purge and will leave the lockfile so we know to resume later
     if [[ $DownloadFailed -eq 1 ]] || [[ $SKIP_PURGE -eq 1 ]] || [[ $VERIFY_LIBRARY -eq 1 ]]; then
       [[ $DEBUG -eq 0 ]] && echo "End : $(date -u)" >>download.log
       [[ $DEBUG -eq 1 ]] && echo "End : $(date -u) *** Simulation ***" >>download.log
-      [[ $SKIP_PURGE -eq 1 ]] && [[ $DownloadFailed -ne 1 ]] && rm "$LockFilePath"
-      [[ $VERIFY_LIBRARY -eq 1 ]] && [[ $RequiresDownload -eq 1 ]] && rm "$LockFilePath"
+      [[ $DEBUG -eq 0 ]] && [[ $SKIP_PURGE -eq 1 ]] && [[ $DownloadFailed -ne 1 ]] && rm "$LockFilePath"
+      [[ $DEBUG -eq 0 ]] && [[ $VERIFY_LIBRARY -eq 1 ]] && [[ $RequiresDownload -eq 1 ]] && rm "$LockFilePath"
       continue
     fi
 
@@ -839,8 +920,8 @@ if [ $AnyDownloads -eq 1 ]; then
     if [[ -f "$NewZIMPath" ]]; then # New ZIM found
       if [[ $DEBUG -eq 0 ]]; then
         if [[ "$OldZIMPath" == "$NewZIMPath" ]]; then
-          echo -e "${GREEN_BOLD}    ✓ Status : New ZIM downloaded succesfully.${CLEAR}"
-          echo "✓ Status : New ZIM downloaded succesfully." >>download.log
+          echo -e "${GREEN_BOLD}    ✓ Status : New ZIM downloaded successfully.${CLEAR}"
+          echo "✓ Status : New ZIM downloaded successfully." >>download.log
         else
           if [[ -f "$OldZIMPath" ]]; then
             if [[ $ARCHIVE_OLD -eq 1 ]]; then
@@ -852,7 +933,7 @@ if [ $AnyDownloads -eq 1 ]; then
               echo -e "${GREEN_BOLD}    ✓ Status : New ZIM downloaded successfully. Old ZIM moved to old_zims/.${CLEAR}"
               echo "✓ Status : New ZIM downloaded successfully. Old ZIM moved to old_zims/." >>download.log
             else
-              rm "$OldZIMPath" && rm "$OldZIMPath.sha256" 2>/dev/null
+              rm "$OldZIMPath" && rm "$OldZIMPath.sha256" 2>/dev/null # Purge old ZIM
               echo -e "${GREEN_BOLD}    ✓ Status : New ZIM downloaded successfully. Old ZIM purged.${CLEAR}"
               echo "✓ Status : New ZIM downloaded successfully. Old ZIM purged." >>download.log
             fi
