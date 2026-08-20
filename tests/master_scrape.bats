@@ -98,5 +98,17 @@ setup() {
   wget() { echo "<feed></feed>"; }
   run master_scrape
   [ "$status" -eq 0 ]
-  echo "$output" | grep -q "Could not find any remote files"
+  # Since v3.4 the base download host is derived from the catalog's own links,
+  # so an empty feed trips that check first and never reaches the later
+  # "Could not find any remote files" guard.
+  echo "$output" | grep -q "No ZIM URLs found"
+}
+
+@test "a catalog whose links are not zim acquisitions aborts" {
+  # Reaches the later guard: there is a usable base URL, but nothing parses
+  # into a remote file name.
+  wget() { echo '<link rel="self" type="application/atom+xml" href="https://lb.download.kiwix.org/zim/" />'; }
+  run master_scrape
+  [ "$status" -eq 0 ]
+  echo "$output" | grep -qE "No ZIM URLs found|Could not find any remote files"
 }
