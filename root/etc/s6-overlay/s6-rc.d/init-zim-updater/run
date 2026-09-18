@@ -1,11 +1,25 @@
 #!/usr/bin/with-contenv sh
 
-# Setup transmission directories in already-mounted /zims dir
+# Setup transmission directories alongside the /zims dir
 # This simplifies configuration
-echo "Creating /config, /downloads, and /watch for transmission"
+echo "Creating /zims, /config, /downloads, and /watch for transmission"
+# /zims is normally a bind mount, but create it so an unmounted run still works
+mkdir -p /zims
 mkdir -p /config
 mkdir -p /downloads/complete
 mkdir -p /downloads/incomplete
 mkdir -p /watch
 
 chown -R abc:abc /watch /config /downloads
+
+# The updater runs as abc and writes into /zims (new ZIMs, torrents, download.log,
+# kiwix-index). A host directory mounted with different ownership leaves it
+# read-only, which silently forces dry-run, so take the directory itself.
+# Not recursive: writing and replacing files only needs write permission on the
+# directory, and a recursive chown over a large library is expensive.
+if chown abc:abc /zims 2>/dev/null; then
+    echo "Set /zims ownership to abc:abc (PUID:PGID)"
+else
+    echo "WARNING: could not chown /zims. If it is not writable by PUID:PGID," \
+         "the updater will run in dry-run and download nothing."
+fi

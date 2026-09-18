@@ -73,6 +73,12 @@ These containers are meant to be short-lived, and exit after checking for update
 
 Make sure to mount the directory with your zim files to /zims; the rest is setup automatically.
 
+On startup the container takes ownership of `/zims` itself (`chown` to `PUID:PGID`, not recursive) so
+the updater can write new ZIMs, torrents and its log there. If that fails -- a read-only mount, or an
+NFS share that squashes root -- the container prints a warning and the script falls back to dry-run,
+downloading nothing. In that case fix the ownership on the host, or set `PUID`/`PGID` to whoever owns
+the directory.
+
 ### Docker
 ```shell
 docker run -it --rm \
@@ -142,4 +148,29 @@ NOTE: if you are not tracking the `main` branch, the update check will be skippe
                                  Expected behavior is to create sha256 files during a normal run so this option can be used at a later date without internet.
                                  Disable this using -S
       -S, --no-sha               Disables saving the zim checksum for future reference. Does not delete present checksums.
+      -N, --no-defaults          Disables downloading a default set of small ZIMs when the directory is empty.
+                                 The default set can be overridden with the DEFAULT_ZIMS environment variable.
 ```
+
+### Seeding an empty library
+
+If the ZIM directory contains no ZIM(s), the script downloads a default set of small ZIMs so a fresh
+library is usable right away:
+
+| ZIM | Approx. size |
+| --- | --- |
+| `wikipedia_en_100` | 318 MiB |
+| `wikipedia_en-simple_all_nopic` | 944 MiB |
+| `wiktionary_en-simple_all_nopic` | 25 MiB |
+| **Total** | **~1.3 GiB** |
+
+Sizes are from the 2026-09 catalog and drift as new versions are published.
+
+Any default that is not offered online is skipped. Override the set with a space-separated list of
+basenames (no date, no `.zim` extension):
+
+```bash
+DEFAULT_ZIMS="wikipedia_en_100 wiktionary_en-simple_all_nopic" ./kiwix-zim-updater.sh -d /full/path/
+```
+
+Pass `-N` (or set `SEED_DEFAULTS=0`) to keep the old behavior of exiting when no ZIM(s) are found.

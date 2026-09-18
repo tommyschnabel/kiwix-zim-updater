@@ -17,6 +17,8 @@ LocalZIMRemoteIndexArray=()
 LocalRequiresDownloadArray=()
 # After updating, this array will be used to store hanging locks and to deal with them
 HangingFileLocks=();
+# This array contains the ZIMs seeded from DEFAULT_ZIMS, which have no local file yet
+SeededZIMArray=()
 
 # This array stores the file names that kiwix has to offer, with .zim extensions
 RemoteFiles=()
@@ -50,6 +52,10 @@ ARCHIVE_OLD="${ARCHIVE_OLD:-0}"
 BaseURL="${BaseURL:-https://lb.download.kiwix.org/zim/}"
 CatalogURL="${CatalogURL:-https://opds.library.kiwix.org/catalog/v2/entries?count=-1}"
 ZIMPath="${ZIMPath:-}"
+SEED_DEFAULTS="${SEED_DEFAULTS:-1}"
+# Basenames (no date, no extension) downloaded when the ZIM directory is empty.
+# Deliberately small so a fresh library is usable without a multi-hundred-GB fetch.
+DEFAULT_ZIMS="${DEFAULT_ZIMS:-wikipedia_en_100 wikipedia_en-simple_all_nopic wiktionary_en-simple_all_nopic}"
 COUNTRY_CODE="${COUNTRY_CODE:-}"
 
 RED_REGULAR="\033[0;31m"
@@ -168,6 +174,51 @@ master_scrape() {
   unset hrefs
 }
 
+# seed_defaults - Populate the local ZIM arrays with a starter set when the
+# library is empty. Each entry of DEFAULT_ZIMS is matched against the remote
+# basenames; the resulting ZIM(s) are treated as missing local files, so the
+# normal processing loop downloads them.
+seed_defaults() {
+  local wanted matched
+  LocalZIMArray=()
+
+  for wanted in $DEFAULT_ZIMS; do
+    matched=-1
+    for ((sd = 0; sd < ${#Basenames[@]}; sd++)); do
+      # Basenames keep the trailing underscore that precedes the YYYY-MM date part
+      if [[ "${Basenames[$sd]}" == "${wanted}_" ]]; then
+        matched=$sd
+        break
+      fi
+    done
+
+    if [[ $matched -eq -1 ]]; then
+      echo -e "${YELLOW_REGULAR}    ✗ $wanted  Not offered online, skipping.${CLEAR}"
+      echo "✗ $wanted not offered online, skipping." >> download.log
+      continue
+    fi
+
+    LocalZIMArray+=("${RemoteFiles[$matched]}")
+    SeededZIMArray+=("${RemoteFiles[$matched]}")
+    echo -e "${GREEN_BOLD}    ✓ ${RemoteFiles[$matched]}  [${RemoteCategory[$matched]}]${CLEAR}"
+  done
+
+  if [[ ${#LocalZIMArray[@]} -eq 0 ]]; then
+    echo -e "${RED_REGULAR}  ✗ None of the default ZIMs were found online. Exiting...${CLEAR}"
+    echo "✗ None of the default ZIMs were found online. Exiting..." >> download.log
+    exit 0
+  fi
+}
+
+# is_seeded - True when the given file name came from DEFAULT_ZIMS rather than disk
+is_seeded() {
+  local candidate
+  for candidate in "${SeededZIMArray[@]}"; do
+    [[ "$candidate" == "$1" ]] && return 0
+  done
+  return 1
+}
+
 # self_update - Script Self-Update Function
 self_update() {
   echo -e "${YELLOW_BOLD}1. Checking for Script Updates...${CLEAR}"
@@ -231,6 +282,8 @@ usage_example() {
   echo '    -x <size>, --max-size      Maximum ZIM Size to be downloaded.'
   echo '                               Specify units include M Mi G Gi, etc. See `man numfmt`'
   echo '    -S, --no-sha               Disables saving the zim checksum for future reference. Does not delete present checksums.'
+  echo '    -N, --no-defaults          Disables downloading a default set of small ZIMs when the directory is empty.'
+  echo '                               The default set can be overridden with the DEFAULT_ZIMS environment variable.'
   echo '                               '
   echo 'Action Method Options:'
   echo '    -w, --web                  Downloads zims over http(s).'
@@ -345,9 +398,15 @@ flags() {
   LocalZIMArray=("${LocalZIMArray[@]}")
 
   # Check that ZIM(s) were actually found/loaded.
-  if [ ${#LocalZIMArray[@]} -eq 0 ]; then # No ZIM(s) were found in the directory... I guess there's nothing else for us to do, so we'll Exit.
-    echo -e "${RED_REGULAR}  ✗ No ZIMs found. Exiting...${CLEAR}"
-    exit 0
+  SeedDefaults=0
+  if [ ${#LocalZIMArray[@]} -eq 0 ]; then # No ZIM(s) were found in the directory.
+    if [[ $SEED_DEFAULTS -eq 0 ]]; then # Seeding disabled, so there is nothing else for us to do.
+      echo -e "${RED_REGULAR}  ✗ No ZIMs found. Exiting...${CLEAR}"
+      exit 0
+    fi
+    SeedDefaults=1
+    echo -e "${YELLOW_REGULAR}  - No ZIMs found. Seeding default ZIM(s)...${CLEAR}"
+    echo "- No ZIMs found. Seeding default ZIM(s)..." >> download.log
   else
     echo -e "${GREEN_BOLD}  ✓ Valid ZIM Directory ${CLEAR}"
   fi
@@ -357,6 +416,9 @@ flags() {
 
   # Build online ZIM list.
   master_scrape
+
+  # An empty library is our cue to fetch a small starter set instead of doing nothing.
+  [[ $SeedDefaults -eq 1 ]] && seed_defaults
 
   echo
 
@@ -493,6 +555,10 @@ while [[ $# -gt 0 ]]; do
       CHECKSUM_FILES=0
       shift
       ;;
+    -N | --no-defaults)
+      SEED_DEFAULTS=0
+      shift
+      ;;
     *)
       # We can either parse the arg here, or just tuck it away for safekeeping
       POSITIONAL_ARGS+=("$1") # save positional arg
@@ -564,6 +630,15 @@ for ((i = 0; i < ${#LocalZIMNameArray[@]}; i++)); do
   FileName=${LocalZIMNameArray[$i]}
   echo -e "${BLUE_BOLD}  - $FileName:${CLEAR}"
   [[ -f "$ZIMPath.~lock.$FileName" ]] && echo -e "${YELLOW_REGULAR}    Incomplete download detected\n${GREEN_BOLD}    ✓ Online Version Found${CLEAR}\n" && LocalRequiresDownloadArray+=(1) && AnyDownloads=1 && continue
+
+  # Seeded ZIM(s) have no local file, so there is nothing to compare -- always fetch.
+  if is_seeded "$FileName"; then
+    LocalRequiresDownloadArray+=(1)
+    AnyDownloads=1
+    echo -e "${GREEN_BOLD}    ✓ Default ZIM, downloading${CLEAR}"
+    echo
+    continue
+  fi
 
 
   MatchingSize=${FileSizes[$RemoteIndex]}

@@ -1,6 +1,7 @@
 #!/usr/bin/with-contenv sh
 
-cd /zims
+# Anything below writes into the current directory, so refuse to run anywhere else
+cd /zims || { echo "Could not enter /zims, aborting"; exit 1; }
 
 /kiwix-zim-updater.sh -t -d .
 
